@@ -5,6 +5,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using UserManagement.Model;
+using UserManagement.Services;
 
 namespace UserManagement.Controllers
 {
@@ -13,11 +14,13 @@ namespace UserManagement.Controllers
         private readonly UserManager<ApplicationUser> userManager;
         private readonly RoleManager<IdentityRole> roleManager;
         private readonly IConfiguration _configuration;
-        public AuthenticateController(UserManager<ApplicationUser> userManager, RoleManager<IdentityRole> roleManager, IConfiguration configuration)
+        private readonly ITokenService _tokenService;
+        public AuthenticateController(UserManager<ApplicationUser> userManager, RoleManager<IdentityRole> roleManager, IConfiguration configuration, ITokenService tokenService)
         {
             this.userManager = userManager;
             this.roleManager = roleManager;
             _configuration = configuration;
+            _tokenService = tokenService;
         }
         public IActionResult Index()
         {
@@ -45,20 +48,18 @@ namespace UserManagement.Controllers
                     authClaims.Add(new Claim(ClaimTypes.Role, userRole));
                 }
 
-                var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Secret"]));
+                var token = _tokenService.GenerateToken(authClaims);
 
-                var token = new JwtSecurityToken(
-                    issuer: _configuration["JWT:ValidIssuer"],
-                    audience: _configuration["JWT:ValidAudience"],
-                    expires: DateTime.Now.AddHours(3),
-                    claims: authClaims,
-                    signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
-                    );
+                // Generate a refresh token
+                var refreshToken = Guid.NewGuid().ToString();
+
+                // Store refresh token with the user
+                await userManager.SetAuthenticationTokenAsync(user, "MyApp", "RefreshToken", refreshToken);
 
                 return Ok(new
                 {
-                    token = new JwtSecurityTokenHandler().WriteToken(token),
-                    expiration = token.ValidTo
+                    token = token,
+                    refreshToken = refreshToken
                 });
             }
             return Unauthorized();
@@ -115,5 +116,78 @@ namespace UserManagement.Controllers
 
             return Ok(new Response { Status = "Success", Message = "User created successfully!" });
         }
+
+
+        public async Task<bool> IsRefreshTokenValid(string refreshToken, string userName)
+        {
+            var user = await userManager.FindByNameAsync(userName);
+            if (user == null)
+            {
+                return false;
+            }
+
+            var storedToken = await userManager.GetAuthenticationTokenAsync(user, "MyApp", "RefreshToken");
+            return storedToken == refreshToken;
+        }
+
+
+        [HttpPost("refresh")]
+        public async Task<IActionResult> Refresh(string accessToken, string refreshToken)
+        {
+            var principal = _tokenService.GetPrincipalFromExpiredToken(accessToken);
+            if (principal == null)
+            {
+                return BadRequest("Invalid access token.");
+            }
+
+            var username = principal.Identity?.Name;
+
+            var user = await userManager.FindByNameAsync(username);
+            if (user == null)
+            {
+                return Unauthorized();
+            }
+
+            var storedRefreshToken = await userManager.GetAuthenticationTokenAsync(user, "MyApp", "RefreshToken");
+
+            if (storedRefreshToken != refreshToken)
+            {
+                return Unauthorized("Invalid refresh token.");
+            }
+
+
+            var newAccessToken = _tokenService.GenerateToken(principal.Claims);
+
+            var newRefreshToken = Guid.NewGuid().ToString();
+
+            // Update refresh token
+            await userManager.SetAuthenticationTokenAsync(user, "MyApp", "RefreshToken", newRefreshToken);
+
+            return Ok(new
+            {
+                AccessToken = newAccessToken,
+                RefreshToken = newRefreshToken
+            });
+        }
+
+        [HttpPost("remove-token")]
+        public async Task<IActionResult> RemoveToken(string userId)
+        {
+            var user = await userManager.FindByIdAsync(userId);
+
+            if (user == null)
+            {
+                return NotFound("User not found.");
+            }
+
+            // Remove the stored refresh token
+            await userManager.RemoveAuthenticationTokenAsync(user, "MyApp", "RefreshToken");
+
+            return Ok("Token removed successfully.");
+        }
+
+
+
+
     }
 }
