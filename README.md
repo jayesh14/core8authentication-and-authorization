@@ -10,6 +10,10 @@ Microsoft.AspNetCore.Identity
 
 Microsoft.AspNetCore.Authentication.JwtBearer
 
+all api
+![image](https://github.com/user-attachments/assets/96b1f2f1-2f79-4580-b701-dcc41de4bf82)
+
+
 1. Registation Admin
 
    ![image](https://github.com/user-attachments/assets/e19c759d-23da-4cad-9d87-1dcbfa9d4990)
